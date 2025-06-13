@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Highway Speed Checker</title>
+  <style>
+    body { font-family: Arial; background: #111; color: white; text-align: center; }
+    canvas { border: 2px solid #4CAF50; margin-top: 20px; }
+    #log { background: #222; margin: 20px auto; padding: 10px; width: 90%; max-width: 700px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>🚗 Highway Speed Checker with Number Plate Reader</h1>
+  <video id="video" width="640" height="480" autoplay muted playsinline></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+  <div id="log"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const log = document.getElementById('log');
+
+    let prevTime = null;
+    let prevY = null;
+    const line1 = 150; // Entry line in px
+    const line2 = 350; // Exit line in px
+    const distanceMeters = 10; // Real-world distance between lines
+    let startTime = null;
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => video.srcObject = stream);
+
+    video.addEventListener('play', () => {
+      const loop = () => {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // Draw trigger lines
+        ctx.strokeStyle = 'red';
+        ctx.beginPath();
+        ctx.moveTo(0, line1);
+        ctx.lineTo(canvas.width, line1);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, line2);
+        ctx.lineTo(canvas.width, line2);
+        ctx.stroke();
+
+        // Simulated object position (mockup)
+        const time = Date.now();
+        const y = 100 + ((time / 30) % 400); // Fake car moving down
+
+        ctx.fillStyle = 'yellow';
+        ctx.fillRect(300, y, 40, 20); // Simulated car
+
+        // Speed tracking logic
+        if (y >= line1 && !startTime) {
+          startTime = time;
+        } else if (y >= line2 && startTime) {
+          const endTime = time;
+          const timeTaken = (endTime - startTime) / 1000;
+          const speed = (distanceMeters / timeTaken) * 3.6; // m/s to km/h
+
+          if (speed > 60) {
+            log.innerHTML = `<p style='color:red;'>⚠️ Over Speed: ${speed.toFixed(2)} km/h</p>`;
+          } else {
+            log.innerHTML = `<p>✅ Speed: ${speed.toFixed(2)} km/h</p>`;
+          }
+
+          // Capture number plate region (simulate)
+          const plateData = ctx.getImageData(300, y, 40, 20);
+          const plateCanvas = document.createElement('canvas');
+          plateCanvas.width = 40;
+          plateCanvas.height = 20;
+          plateCanvas.getContext('2d').putImageData(plateData, 0, 0);
+
+          Tesseract.recognize(plateCanvas, 'eng', { logger: m => console.log(m) })
+            .then(({ data: { text } }) => {
+              log.innerHTML += `<p>🔍 Number Plate: <strong>${text.trim()}</strong></p>`;
+            });
+
+          startTime = null;
+        }
+
+        requestAnimationFrame(loop);
+      };
+      loop();
+    });
+  </script>
+</body>
+</html>
