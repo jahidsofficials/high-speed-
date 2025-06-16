@@ -5,15 +5,80 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Highway Speed Checker</title>
   <style>
-    body { font-family: Arial; background: #111; color: white; text-align: center; }
-    canvas { border: 2px solid #4CAF50; margin-top: 20px; }
-    #log { background: #222; margin: 20px auto; padding: 10px; width: 90%; max-width: 700px; border-radius: 5px; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(to right, #111, #222);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 20px;
+    }
+
+    .video-container {
+      width: 100%;
+      max-width: 700px;
+      position: relative;
+    }
+
+    video, canvas {
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 2px solid #4CAF50;
+      margin-bottom: 10px;
+    }
+
+    #log {
+      background: #222;
+      padding: 15px;
+      width: 100%;
+      max-width: 700px;
+      margin-top: 10px;
+      border-radius: 8px;
+      font-size: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 1.5rem;
+      }
+
+      #log {
+        font-size: 0.95rem;
+        padding: 12px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      h1 {
+        font-size: 1.3rem;
+      }
+
+      #log {
+        font-size: 0.9rem;
+      }
+    }
   </style>
 </head>
 <body>
   <h1>🚗 Highway Speed Checker with Number Plate Reader</h1>
-  <video id="video" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+  <div class="video-container">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+  </div>
   <div id="log">📡 Loading model...</div>
 
   <!-- TensorFlow & COCO-SSD -->
@@ -34,7 +99,6 @@
     let startTime = null;
     let model;
 
-    // Rear camera access
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: "environment" } }
     })
@@ -44,18 +108,18 @@
       log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible. Try a different device.</p>`;
     });
 
-    // Load TensorFlow model
     cocoSsd.load().then(loadedModel => {
       model = loadedModel;
       log.innerHTML = "✅ Model Loaded. Detecting cars...";
     });
 
-    // Detect cars and measure speed
     video.addEventListener('play', () => {
       const detect = async () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Draw reference lines
         ctx.strokeStyle = 'red';
         ctx.beginPath();
         ctx.moveTo(0, line1);
@@ -92,7 +156,6 @@
                 log.innerHTML = `<p>✅ Speed: ${speed.toFixed(2)} km/h</p>`;
               }
 
-              // Crop car area for Tesseract (simulate number plate OCR)
               const plateData = ctx.getImageData(x, y, w, h / 2);
               const plateCanvas = document.createElement('canvas');
               plateCanvas.width = w;
