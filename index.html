@@ -30,8 +30,15 @@
     const distanceMeters = 10; // Real-world distance between lines
     let startTime = null;
 
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then(stream => video.srcObject = stream);
+  navigator.mediaDevices.getUserMedia({
+  video: { facingMode: { exact: "environment" } }
+})
+  .then(stream => video.srcObject = stream)
+  .catch(err => {
+    console.error("Error accessing the rear camera:", err);
+    log.innerHTML = `<p style="color:red;">❌ Unable to access rear camera. Please check permissions or try a different device.</p>`;
+  });
+
 
     video.addEventListener('play', () => {
       const loop = () => {
