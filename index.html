@@ -95,7 +95,7 @@
     video.addEventListener('play', () => {
       const detect = async () => {
         const now = Date.now();
-        if (now - lastDetectionTime < 300) {
+        if (now - lastDetectionTime < 150) {
           requestAnimationFrame(detect);
           return;
         }
