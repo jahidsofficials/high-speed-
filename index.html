@@ -2,51 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Highway Speed Checker</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(to right, #111, #222);
-      color: #fff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
+      background: #111;
+      color: white;
+      font-family: sans-serif;
       text-align: center;
-    }
-    h1 { font-size: 1.8rem; margin-bottom: 20px; }
-    .video-container {
-      width: 100%;
-      max-width: 700px;
-      position: relative;
+      padding: 20px;
     }
     video, canvas {
       width: 100%;
-      height: auto;
-      border-radius: 10px;
+      max-width: 720px;
       border: 2px solid #4CAF50;
-      margin-bottom: 10px;
+      border-radius: 10px;
+      margin-top: 10px;
     }
     #log {
+      margin-top: 15px;
+      max-width: 720px;
       background: #222;
-      padding: 15px;
-      width: 100%;
-      max-width: 700px;
-      margin-top: 10px;
+      padding: 10px;
       border-radius: 8px;
-      font-size: 1rem;
+      text-align: left;
     }
   </style>
 </head>
 <body>
-  <h1>🚗 Highway Speed Checker with Number Plate Reader</h1>
-  <div class="video-container">
-    <video id="video" autoplay muted playsinline></video>
-    <canvas id="canvas"></canvas>
-  </div>
-  <div id="log">📡 Loading model...</div>
+  <h1>🚗 Highway Speed Checker with Number Plate</h1>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="log">📡 Initializing...</div>
 
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
@@ -58,110 +45,107 @@
     const ctx = canvas.getContext('2d');
     const log = document.getElementById('log');
 
-    const line1 = 150;
-    const line2 = 350;
-    const distanceMeters = 10;
-
-    let model;
-    let lastDetectionTime = 0;
+    const line1 = 150, line2 = 350;
+    const distance = 10; // in meters
     const vehicleTracker = {};
+    let model;
 
-    // 1. Setup camera
+    // Camera setup
     navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: "environment" }
     }).then(stream => {
       video.srcObject = stream;
-    }).catch(err => {
-      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible.</p>`;
+    }).catch(() => {
+      log.innerHTML = "❌ Camera not accessible.";
     });
 
-    // 2. Load COCO SSD model
-    cocoSsd.load().then(loadedModel => {
-      model = loadedModel;
-      log.innerHTML = "✅ Model Loaded. Detecting vehicles...";
+    // Load model
+    cocoSsd.load().then(m => {
+      model = m;
+      log.innerHTML = "✅ Model loaded. Waiting for vehicles...";
     });
 
-    // 3. Detection loop
-    video.addEventListener('play', () => {
-      const detect = async () => {
-        const now = Date.now();
-        if (now - lastDetectionTime < 400) {
-          return requestAnimationFrame(detect);
-        }
-        lastDetectionTime = now;
+    function getVehicleId(pred) {
+      const [x, y, w, h] = pred.bbox;
+      return `${Math.round(x)}-${Math.round(y)}-${Math.round(w)}-${Math.round(h)}`;
+    }
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    async function detectFrame() {
+      if (!model) return requestAnimationFrame(detectFrame);
 
-        // Draw trigger lines
-        ctx.strokeStyle = 'red';
-        ctx.lineWidth = 2;
-        [line1, line2].forEach(line => {
-          ctx.beginPath();
-          ctx.moveTo(0, line);
-          ctx.lineTo(canvas.width, line);
-          ctx.stroke();
-        });
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        if (!model) return requestAnimationFrame(detect);
+      // Draw reference lines
+      ctx.strokeStyle = "red";
+      [line1, line2].forEach(y => {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      });
 
-        const predictions = await model.detect(video);
+      const predictions = await model.detect(video);
+      const classes = ['car', 'truck', 'bus', 'motorcycle'];
 
-        predictions.forEach(async (pred, index) => {
-          const validClasses = ['car', 'truck', 'motorcycle', 'bus'];
-          if (validClasses.includes(pred.class) && pred.score > 0.65) {
-            const [x, y, w, h] = pred.bbox;
-            const id = `${Math.round(x)}-${Math.round(w)}`; // simple hash
+      predictions.forEach(async (pred) => {
+        if (classes.includes(pred.class) && pred.score > 0.6) {
+          const [x, y, w, h] = pred.bbox;
+          const centerY = y + h / 2;
+          const id = getVehicleId(pred);
 
-            ctx.strokeStyle = 'lime';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, w, h);
-            ctx.fillStyle = 'lime';
-            ctx.fillText(pred.class.toUpperCase(), x, y - 5);
+          ctx.strokeStyle = "lime";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, w, h);
+          ctx.fillStyle = "white";
+          ctx.fillText(pred.class.toUpperCase(), x, y - 5);
 
-            const centerY = y + h / 2;
+          // Detect line crossing
+          const track = vehicleTracker[id] || { started: false, completed: false };
 
-            // Entry detection
-            if (centerY > line1 && centerY < line2 && !vehicleTracker[id]) {
-              vehicleTracker[id] = { start: Date.now(), bbox: pred.bbox };
-            }
-
-            // Exit detection
-            if (centerY > line2 && vehicleTracker[id] && !vehicleTracker[id].end) {
-              vehicleTracker[id].end = Date.now();
-              const time = (vehicleTracker[id].end - vehicleTracker[id].start) / 1000;
-              const speed = (distanceMeters / time) * 3.6;
-
-              log.innerHTML = speed > 60
-                ? `<p style="color:red;">⚠️ ${pred.class.toUpperCase()} Over Speed: ${speed.toFixed(2)} km/h</p>`
-                : `<p>✅ ${pred.class.toUpperCase()} Speed: ${speed.toFixed(2)} km/h</p>`;
-
-              // OCR for number plate (try full height this time)
-              const [bx, by, bw, bh] = pred.bbox;
-              const plateImage = ctx.getImageData(bx, by, bw, bh);
-              const plateCanvas = document.createElement('canvas');
-              plateCanvas.width = bw;
-              plateCanvas.height = bh;
-              plateCanvas.getContext('2d').putImageData(plateImage, 0, 0);
-
-              try {
-                const result = await Tesseract.recognize(plateCanvas, 'eng');
-                const number = result.data.text.trim().replace(/\s+/g, '');
-                log.innerHTML += `<p>🔍 Number Plate: <strong>${number || 'N/A'}</strong></p>`;
-              } catch {
-                log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
-              }
-
-              // Reset tracker for this vehicle
-              setTimeout(() => delete vehicleTracker[id], 5000);
-            }
+          if (!track.started && centerY > line1) {
+            track.startTime = performance.now();
+            track.started = true;
           }
-        });
 
-        requestAnimationFrame(detect);
-      };
-      detect();
+          if (track.started && !track.completed && centerY > line2) {
+            track.endTime = performance.now();
+            track.completed = true;
+
+            const timeTaken = (track.endTime - track.startTime) / 1000;
+            const speed = (distance / timeTaken) * 3.6;
+            const overspeed = speed > 60;
+
+            const vehicleType = pred.class.toUpperCase();
+            log.innerHTML += `
+              <p>${overspeed ? '⚠️' : '✅'} ${vehicleType} Speed: 
+              <strong style="color:${overspeed ? 'red' : 'lime'}">${speed.toFixed(2)} km/h</strong></p>`;
+
+            // OCR in background
+            const snapshot = ctx.getImageData(x, y, w, h);
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = w;
+            tempCanvas.height = h;
+            tempCanvas.getContext('2d').putImageData(snapshot, 0, 0);
+
+            Tesseract.recognize(tempCanvas, 'eng').then(result => {
+              const text = result.data.text.trim().replace(/\s+/g, '');
+              log.innerHTML += `<p>🔍 Number Plate: <strong>${text || 'N/A'}</strong></p>`;
+            }).catch(() => {
+              log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
+            });
+          }
+
+          vehicleTracker[id] = track;
+        }
+      });
+
+      requestAnimationFrame(detectFrame);
+    }
+
+    video.addEventListener('play', () => {
+      detectFrame();
     });
   </script>
 </body>
