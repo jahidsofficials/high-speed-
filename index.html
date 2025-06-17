@@ -116,84 +116,93 @@
     });
 
     video.addEventListener('play', () => {
-      const detect = async () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const detect = async () => {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Draw detection lines
-        ctx.strokeStyle = 'red';
+    // Draw detection lines
+    ctx.strokeStyle = 'red';
+    ctx.lineWidth = 2;
+    [line1, line2].forEach(line => {
+      ctx.beginPath();
+      ctx.moveTo(0, line);
+      ctx.lineTo(canvas.width, line);
+      ctx.stroke();
+    });
+
+    if (model) {
+      const predictions = await model.detect(video);
+
+      predictions.forEach(async pred => {
+        const valid = ['car', 'truck', 'motorcycle', 'bus'];
+        if (!valid.includes(pred.class) || pred.score < 0.66) return;
+
+        const [x, y, w, h] = pred.bbox;
+        const centerX = x + w / 2;
+        const centerY = y + h / 2;
+        const id = `${pred.class}-${Math.round(centerX)}-${Math.round(centerY)}`;
+
+        // Draw bounding box
+        ctx.strokeStyle = 'lime';
         ctx.lineWidth = 2;
-        [line1, line2].forEach(line => {
-          ctx.beginPath();
-          ctx.moveTo(0, line);
-          ctx.lineTo(canvas.width, line);
-          ctx.stroke();
-        });
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle = 'lime';
+        ctx.fillText(pred.class.toUpperCase(), x, y - 5);
 
-        if (!model) return requestAnimationFrame(detect);
+        if (!vehicleTracker[id]) vehicleTracker[id] = {};
 
-        const predictions = await model.detect(video);
+        const track = vehicleTracker[id];
 
-        for (const pred of predictions) {
-          const valid = ['car', 'truck', 'motorcycle', 'bus'];
-          if (!valid.includes(pred.class) || pred.score < 0.66) continue;
-
-          const [x, y, w, h] = pred.bbox;
-          const centerY = y + h / 2;
-          const id = `${Math.round(x)}-${Math.round(w)}-${pred.class}`;
-
-          // Draw bounding box
-          ctx.strokeStyle = 'lime';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x, y, w, h);
-          ctx.fillStyle = 'lime';
-          ctx.fillText(pred.class.toUpperCase(), x, y - 5);
-
-          if (centerY > line1 && !vehicleTracker[id]) {
-            vehicleTracker[id] = { start: Date.now(), bbox: pred.bbox };
-          }
-
-          if (centerY > line2 && vehicleTracker[id] && !vehicleTracker[id].end) {
-            vehicleTracker[id].end = Date.now();
-            const timeTaken = (vehicleTracker[id].end - vehicleTracker[id].start) / 1000;
-            const speed = (distanceMeters / timeTaken) * 3.6;
-            const timestamp = new Date().toLocaleString();
-
-            log.innerHTML = `<p>${speed > 60 ? '⚠️ Over Speed' : '✅ OK'} — <strong>${pred.class.toUpperCase()}</strong>: ${speed.toFixed(2)} km/h</p>`;
-
-            if (speed > 60) alertSound.play();
-
-            // OCR
-            const plateImage = ctx.getImageData(x, y, w, h);
-            const plateCanvas = document.createElement('canvas');
-            plateCanvas.width = w;
-            plateCanvas.height = h;
-            plateCanvas.getContext('2d').putImageData(plateImage, 0, 0);
-
-            try {
-              const result = await Tesseract.recognize(plateCanvas, 'eng');
-              const number = result.data.text.trim().replace(/\s+/g, '');
-              log.innerHTML += `<p>🔍 Number Plate: <strong>${number || 'N/A'}</strong></p>`;
-              vehicleData.push({
-                type: pred.class.toUpperCase(),
-                speed: speed.toFixed(2),
-                plate: number || "N/A",
-                time: timestamp
-              });
-            } catch {
-              log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
-            }
-
-            setTimeout(() => delete vehicleTracker[id], 3000);
-          }
+        if (!track.start && centerY >= line1) {
+          track.start = Date.now();
         }
 
-        requestAnimationFrame(detect);
-      };
+        if (track.start && !track.end && centerY >= line2) {
+          track.end = Date.now();
 
-      detect();
-    });
+          const timeTaken = (track.end - track.start) / 1000;
+          const speed = (distanceMeters / timeTaken) * 3.6;
+          const timestamp = new Date().toLocaleString();
+
+          log.innerHTML = `<p>${speed > 60 ? '⚠️ Over Speed' : '✅ OK'} — <strong>${pred.class.toUpperCase()}</strong>: ${speed.toFixed(2)} km/h</p>`;
+
+          if (speed > 60) alertSound.play();
+
+          // OCR
+          const plateCanvas = document.createElement('canvas');
+          plateCanvas.width = w;
+          plateCanvas.height = h;
+          const plateCtx = plateCanvas.getContext('2d');
+          plateCtx.drawImage(video, x, y, w, h, 0, 0, w, h);
+
+          try {
+            const result = await Tesseract.recognize(plateCanvas, 'eng');
+            const number = result.data.text.trim().replace(/\s+/g, '') || 'N/A';
+            log.innerHTML += `<p>🔍 Number Plate: <strong>${number}</strong></p>`;
+
+            vehicleData.push({
+              type: pred.class.toUpperCase(),
+              speed: speed.toFixed(2),
+              plate: number,
+              time: timestamp
+            });
+          } catch {
+            log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
+          }
+
+          // Clear this vehicle from tracking after some time
+          setTimeout(() => delete vehicleTracker[id], 2000);
+        }
+      });
+    }
+
+    requestAnimationFrame(detect);
+  };
+
+  detect();
+});
+
 
     // CSV Export
     function exportCSV() {
