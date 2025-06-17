@@ -2,12 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Highway Speed Checker</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: 'Segoe UI', sans-serif;
       background: linear-gradient(to right, #111, #222);
       color: #fff;
       display: flex;
@@ -16,12 +15,18 @@
       padding: 20px;
       text-align: center;
     }
-    h1 { font-size: 1.8rem; margin-bottom: 20px; }
+
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 20px;
+    }
+
     .video-container {
       width: 100%;
       max-width: 700px;
       position: relative;
     }
+
     video, canvas {
       width: 100%;
       height: auto;
@@ -29,6 +34,7 @@
       border: 2px solid #4CAF50;
       margin-bottom: 10px;
     }
+
     #log {
       background: #222;
       padding: 15px;
@@ -38,14 +44,25 @@
       border-radius: 8px;
       font-size: 1rem;
     }
-    @media (max-width: 768px) {
-      h1 { font-size: 1.5rem; }
-      #log { font-size: 0.95rem; padding: 12px; }
+
+    .buttons {
+      margin-top: 15px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
     }
-    @media (max-width: 480px) {
-      h1 { font-size: 1.3rem; }
-      #log { font-size: 0.9rem; }
+
+    button {
+      padding: 10px 16px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
     }
+
+    .export { background: #4CAF50; color: #fff; }
+    .reset { background: #f44336; color: #fff; }
   </style>
 </head>
 <body>
@@ -54,8 +71,18 @@
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
   </div>
+
+  <div class="buttons">
+    <button class="export" onclick="exportCSV()">📁 Export CSV</button>
+    <button class="reset" onclick="resetData()">🕹️ Reset</button>
+  </div>
+
   <div id="log">📡 Loading model...</div>
 
+  <!-- Audio Alert -->
+  <audio id="alert-sound" src="https://www.soundjay.com/button/beep-07.mp3" preload="auto"></audio>
+
+  <!-- Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
@@ -65,6 +92,7 @@
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const log = document.getElementById('log');
+    const alertSound = document.getElementById('alert-sound');
 
     const line1 = 150;
     const line2 = 350;
@@ -84,7 +112,7 @@
 
     cocoSsd.load().then(loadedModel => {
       model = loadedModel;
-      log.innerHTML = "✅ Model Loaded. Detecting vehicles...";
+      log.innerHTML = "✅ Ready For Detecting vehicles...";
     });
 
     video.addEventListener('play', () => {
@@ -93,7 +121,7 @@
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Draw lines
+        // Draw detection lines
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         [line1, line2].forEach(line => {
@@ -115,19 +143,17 @@
           const centerY = y + h / 2;
           const id = `${Math.round(x)}-${Math.round(w)}-${pred.class}`;
 
-          // Draw box
+          // Draw bounding box
           ctx.strokeStyle = 'lime';
           ctx.lineWidth = 2;
           ctx.strokeRect(x, y, w, h);
           ctx.fillStyle = 'lime';
           ctx.fillText(pred.class.toUpperCase(), x, y - 5);
 
-          // Entry time
           if (centerY > line1 && !vehicleTracker[id]) {
             vehicleTracker[id] = { start: Date.now(), bbox: pred.bbox };
           }
 
-          // Exit and speed calc
           if (centerY > line2 && vehicleTracker[id] && !vehicleTracker[id].end) {
             vehicleTracker[id].end = Date.now();
             const timeTaken = (vehicleTracker[id].end - vehicleTracker[id].start) / 1000;
@@ -135,6 +161,8 @@
             const timestamp = new Date().toLocaleString();
 
             log.innerHTML = `<p>${speed > 60 ? '⚠️ Over Speed' : '✅ OK'} — <strong>${pred.class.toUpperCase()}</strong>: ${speed.toFixed(2)} km/h</p>`;
+
+            if (speed > 60) alertSound.play();
 
             // OCR
             const plateImage = ctx.getImageData(x, y, w, h);
@@ -166,6 +194,30 @@
 
       detect();
     });
+
+    // CSV Export
+    function exportCSV() {
+      if (!vehicleData.length) {
+        alert("No data to export.");
+        return;
+      }
+
+      const headers = "Vehicle Type,Speed (km/h),Number Plate,Timestamp\n";
+      const rows = vehicleData.map(v => `${v.type},${v.speed},${v.plate},${v.time}`).join("\n");
+      const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
+
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "vehicle_speed_log.csv";
+      link.click();
+    }
+
+    // Reset Data
+    function resetData() {
+      vehicleData.length = 0;
+      log.innerHTML = "🔁 Tracker reset.";
+      for (let key in vehicleTracker) delete vehicleTracker[key];
+    }
   </script>
 </body>
 </html>
