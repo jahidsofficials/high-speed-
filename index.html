@@ -38,14 +38,6 @@
       border-radius: 8px;
       font-size: 1rem;
     }
-    @media (max-width: 768px) {
-      h1 { font-size: 1.5rem; }
-      #log { font-size: 0.95rem; padding: 12px; }
-    }
-    @media (max-width: 480px) {
-      h1 { font-size: 1.3rem; }
-      #log { font-size: 0.9rem; }
-    }
   </style>
 </head>
 <body>
@@ -56,7 +48,6 @@
   </div>
   <div id="log">📡 Loading model...</div>
 
-  <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
@@ -71,33 +62,31 @@
     const line2 = 350;
     const distanceMeters = 10;
 
-    let startTime = null;
     let model;
     let lastDetectionTime = 0;
+    const vehicleTracker = {};
 
-    // 1. Setup camera with lower resolution
+    // 1. Setup camera
     navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: { exact: "environment" } }
-    })
-    .then(stream => video.srcObject = stream)
-    .catch(err => {
-      console.error("Camera error:", err);
-      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible. Try a different device.</p>`;
+      video: { width: 640, height: 480, facingMode: "environment" }
+    }).then(stream => {
+      video.srcObject = stream;
+    }).catch(err => {
+      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible.</p>`;
     });
 
-    // 2. Load object detection model
+    // 2. Load COCO SSD model
     cocoSsd.load().then(loadedModel => {
       model = loadedModel;
-      log.innerHTML = "✅ Model Loaded. Detecting cars...";
+      log.innerHTML = "✅ Model Loaded. Detecting vehicles...";
     });
 
-    // 3. Detection loop throttled
+    // 3. Detection loop
     video.addEventListener('play', () => {
       const detect = async () => {
         const now = Date.now();
-        if (now - lastDetectionTime < 500) {
-          requestAnimationFrame(detect);
-          return;
+        if (now - lastDetectionTime < 400) {
+          return requestAnimationFrame(detect);
         }
         lastDetectionTime = now;
 
@@ -105,8 +94,9 @@
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Draw speed lines
+        // Draw trigger lines
         ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
         [line1, line2].forEach(line => {
           ctx.beginPath();
           ctx.moveTo(0, line);
@@ -117,44 +107,54 @@
         if (!model) return requestAnimationFrame(detect);
 
         const predictions = await model.detect(video);
-        predictions.forEach(async pred => {
-          if (pred.class === 'car' && pred.score > 0.66) {
+
+        predictions.forEach(async (pred, index) => {
+          const validClasses = ['car', 'truck', 'motorcycle', 'bus'];
+          if (validClasses.includes(pred.class) && pred.score > 0.65) {
             const [x, y, w, h] = pred.bbox;
+            const id = `${Math.round(x)}-${Math.round(w)}`; // simple hash
+
             ctx.strokeStyle = 'lime';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, w, h);
             ctx.fillStyle = 'lime';
-            ctx.fillText('Car', x, y - 5);
+            ctx.fillText(pred.class.toUpperCase(), x, y - 5);
 
-            const carCenterY = y + h / 2;
+            const centerY = y + h / 2;
 
-            if (carCenterY > line1 && carCenterY < line2 && !startTime) {
-              startTime = Date.now();
-            } else if (carCenterY > line2 && startTime) {
-              const endTime = Date.now();
-              const timeTaken = (endTime - startTime) / 1000;
-              const speed = (distanceMeters / timeTaken) * 3.6;
-              const speedText = speed > 60 
-                ? `<p style='color:red;'>⚠️ Over Speed: ${speed.toFixed(2)} km/h</p>`
-                : `<p>✅ Speed: ${speed.toFixed(2)} km/h</p>`;
-              log.innerHTML = speedText;
+            // Entry detection
+            if (centerY > line1 && centerY < line2 && !vehicleTracker[id]) {
+              vehicleTracker[id] = { start: Date.now(), bbox: pred.bbox };
+            }
 
-              // OCR for number plate
-              const plateData = ctx.getImageData(x, y, w, h / 2);
+            // Exit detection
+            if (centerY > line2 && vehicleTracker[id] && !vehicleTracker[id].end) {
+              vehicleTracker[id].end = Date.now();
+              const time = (vehicleTracker[id].end - vehicleTracker[id].start) / 1000;
+              const speed = (distanceMeters / time) * 3.6;
+
+              log.innerHTML = speed > 60
+                ? `<p style="color:red;">⚠️ ${pred.class.toUpperCase()} Over Speed: ${speed.toFixed(2)} km/h</p>`
+                : `<p>✅ ${pred.class.toUpperCase()} Speed: ${speed.toFixed(2)} km/h</p>`;
+
+              // OCR for number plate (try full height this time)
+              const [bx, by, bw, bh] = pred.bbox;
+              const plateImage = ctx.getImageData(bx, by, bw, bh);
               const plateCanvas = document.createElement('canvas');
-              plateCanvas.width = w;
-              plateCanvas.height = h / 2;
-              plateCanvas.getContext('2d').putImageData(plateData, 0, 0);
+              plateCanvas.width = bw;
+              plateCanvas.height = bh;
+              plateCanvas.getContext('2d').putImageData(plateImage, 0, 0);
 
               try {
                 const result = await Tesseract.recognize(plateCanvas, 'eng');
-                const numberPlate = result.data.text.trim();
-                log.innerHTML += `<p>🔍 Number Plate: <strong>${numberPlate}</strong></p>`;
-              } catch (error) {
-                log.innerHTML += `<p style='color:orange;'>⚠️ OCR failed</p>`;
+                const number = result.data.text.trim().replace(/\s+/g, '');
+                log.innerHTML += `<p>🔍 Number Plate: <strong>${number || 'N/A'}</strong></p>`;
+              } catch {
+                log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
               }
 
-              startTime = null;
+              // Reset tracker for this vehicle
+              setTimeout(() => delete vehicleTracker[id], 5000);
             }
           }
         });
