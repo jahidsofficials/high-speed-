@@ -43,7 +43,6 @@
       margin-top: 10px;
       border-radius: 8px;
       font-size: 1rem;
-      text-align: left;
     }
 
     .buttons {
@@ -103,22 +102,6 @@
     const trackers = {};
     let trackerId = 0;
 
-    // Offscreen canvas for faster detection (smaller size)
-    const offCanvas = document.createElement("canvas");
-    const offCtx = offCanvas.getContext("2d");
-    offCanvas.width = 320;
-    offCanvas.height = 240;
-
-    // OCR worker
-    let ocrWorker;
-    (async () => {
-      ocrWorker = await Tesseract.createWorker();
-      await ocrWorker.load();
-      await ocrWorker.loadLanguage('eng');
-      await ocrWorker.initialize('eng');
-      console.log("✅ OCR Worker ready");
-    })();
-
     class TrackedObject {
       constructor(id, x, y) {
         this.id = id;
@@ -130,6 +113,7 @@
         this.startTime = null;
         this.endTime = null;
       }
+
       update(x, y) {
         const now = Date.now();
         const dt = (now - this.lastUpdate) / 1000;
@@ -139,10 +123,20 @@
         this.y = y;
         this.lastUpdate = now;
       }
+
+      predict() {
+        const now = Date.now();
+        const dt = (now - this.lastUpdate) / 1000;
+        return {
+          x: this.x + this.vx * dt,
+          y: this.y + this.vy * dt
+        };
+      }
     }
 
     function matchAndTrack(predictions) {
       const matched = new Set();
+
       for (const pred of predictions) {
         const [x, y, w, h] = pred.bbox;
         const cx = x + w / 2;
@@ -150,6 +144,7 @@
 
         let bestMatch = null;
         let minDist = 50;
+
         for (const id in trackers) {
           const t = trackers[id];
           const dx = cx - t.x;
@@ -173,41 +168,27 @@
       }
     }
 
-    // ✅ Camera Access with fallback
+    // Camera Access
     navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-        facingMode: { ideal: "environment" } // fallback to "user" if no rear camera
-      }
+      video: { width: 640, height: 480, facingMode: { exact: "environment" } }
     }).then(stream => {
       video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        video.play();
-      };
     }).catch(err => {
-      log.innerHTML = `<p style="color:red;">❌ Camera not accessible: ${err.message}</p>`;
-      console.error("Camera error:", err);
+      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible.</p>`;
     });
 
-    // Load faster model backbone
-    cocoSsd.load({ base: 'lite_mobilenet_v2' }).then(loaded => {
+    cocoSsd.load().then(loaded => {
       model = loaded;
       log.innerHTML = "✅ Ready for detecting vehicles...";
     });
 
-    let lastDetectTime = 0;
-
     video.addEventListener('play', () => {
-      const detect = async (time) => {
-        requestAnimationFrame(detect);
-        if (!model) return;
-
-        // Always draw video & guide lines
+      const detect = async () => {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+        // Draw lines
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         [line1, line2].forEach(line => {
@@ -217,41 +198,24 @@
           ctx.stroke();
         });
 
-        // Run detection only every 200ms (~5 FPS)
-        if (time - lastDetectTime < 200) return;
-        lastDetectTime = time;
+        if (!model) return requestAnimationFrame(detect);
 
-        // Smaller canvas for detection
-        offCtx.drawImage(video, 0, 0, offCanvas.width, offCanvas.height);
-        const predictions = await model.detect(offCanvas);
-
-        const vehicles = predictions.filter(
-          p => ['car', 'truck', 'motorcycle', 'bus'].includes(p.class) && p.score > 0.66
-        );
-
+        const predictions = await model.detect(video);
+        const vehicles = predictions.filter(p => ['car', 'truck', 'motorcycle', 'bus'].includes(p.class) && p.score > 0.66);
         matchAndTrack(vehicles);
 
         for (const pred of vehicles) {
           const [x, y, w, h] = pred.bbox;
-          const scaleX = canvas.width / offCanvas.width;
-          const scaleY = canvas.height / offCanvas.height;
-
-          // Scale coords back to main canvas
-          const bx = x * scaleX;
-          const by = y * scaleY;
-          const bw = w * scaleX;
-          const bh = h * scaleY;
-
-          const cx = bx + bw / 2;
-          const cy = by + bh / 2;
+          const cx = x + w / 2;
+          const cy = y + h / 2;
           const id = pred.trackerId;
           const tracker = trackers[id];
 
           ctx.strokeStyle = 'lime';
           ctx.lineWidth = 2;
-          ctx.strokeRect(bx, by, bw, bh);
+          ctx.strokeRect(x, y, w, h);
           ctx.fillStyle = 'lime';
-          ctx.fillText(`${pred.class.toUpperCase()} (${id})`, bx, by - 5);
+          ctx.fillText(`${pred.class.toUpperCase()} (${id})`, x, y - 5);
 
           if (!tracker.startTime && cy >= line1) {
             tracker.startTime = Date.now();
@@ -268,28 +232,30 @@
             if (speed > 60) alertSound.play();
 
             const plateCanvas = document.createElement('canvas');
-            plateCanvas.width = bw;
-            plateCanvas.height = bh;
-            plateCanvas.getContext('2d').drawImage(video, bx, by, bw, bh, 0, 0, bw, bh);
+            plateCanvas.width = w;
+            plateCanvas.height = h;
+            plateCanvas.getContext('2d').drawImage(video, x, y, w, h, 0, 0, w, h);
 
-            if (ocrWorker) {
-              ocrWorker.recognize(plateCanvas).then(result => {
-                const number = result.data.text.trim().replace(/\s+/g, '') || 'N/A';
-                log.innerHTML += `<p>🔍 Number Plate: <strong>${number}</strong></p>`;
-                vehicleData.push({
-                  type: pred.class.toUpperCase(),
-                  speed: speed.toFixed(2),
-                  plate: number,
-                  time: timestamp
-                });
-              }).catch(() => {
-                log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
+            try {
+              const result = await Tesseract.recognize(plateCanvas, 'eng');
+              const number = result.data.text.trim().replace(/\s+/g, '') || 'N/A';
+              log.innerHTML += `<p>🔍 Number Plate: <strong>${number}</strong></p>`;
+
+              vehicleData.push({
+                type: pred.class.toUpperCase(),
+                speed: speed.toFixed(2),
+                plate: number,
+                time: timestamp
               });
+            } catch {
+              log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
             }
 
             setTimeout(() => delete trackers[id], 3000);
           }
         }
+
+        requestAnimationFrame(detect);
       };
 
       detect();
@@ -300,6 +266,7 @@
         alert("No data to export.");
         return;
       }
+
       const headers = "Vehicle Type,Speed (km/h),Number Plate,Timestamp\n";
       const rows = vehicleData.map(v => `${v.type},${v.speed},${v.plate},${v.time}`).join("\n");
       const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
