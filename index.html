@@ -130,7 +130,6 @@
         this.startTime = null;
         this.endTime = null;
       }
-
       update(x, y) {
         const now = Date.now();
         const dt = (now - this.lastUpdate) / 1000;
@@ -144,7 +143,6 @@
 
     function matchAndTrack(predictions) {
       const matched = new Set();
-
       for (const pred of predictions) {
         const [x, y, w, h] = pred.bbox;
         const cx = x + w / 2;
@@ -152,7 +150,6 @@
 
         let bestMatch = null;
         let minDist = 50;
-
         for (const id in trackers) {
           const t = trackers[id];
           const dx = cx - t.x;
@@ -176,13 +173,21 @@
       }
     }
 
-    // Camera Access
+    // ✅ Camera Access with fallback
     navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: "environment" }
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        facingMode: { ideal: "environment" } // fallback to "user" if no rear camera
+      }
     }).then(stream => {
       video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play();
+      };
     }).catch(err => {
-      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible.</p>`;
+      log.innerHTML = `<p style="color:red;">❌ Camera not accessible: ${err.message}</p>`;
+      console.error("Camera error:", err);
     });
 
     // Load faster model backbone
