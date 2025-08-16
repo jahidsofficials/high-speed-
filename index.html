@@ -86,201 +86,179 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
 
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const log = document.getElementById('log');
-    const alertSound = document.getElementById('alert-sound');
+ <script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const log = document.getElementById('log');
+const alertSound = document.getElementById('alert-sound');
 
-    const line1 = 150;
-    const line2 = 350;
-    const distanceMeters = 10;
+const line1 = 120;
+const line2 = 260;
+const distanceMeters = 10;
 
-    let model;
-    const vehicleData = [];
-    const trackers = {};
-    let trackerId = 0;
+let model;
+const vehicleData = [];
+const trackers = {};
+let trackerId = 0;
 
-    class TrackedObject {
-      constructor(id, x, y) {
-        this.id = id;
-        this.x = x;
-        this.y = y;
-        this.vx = 0;
-        this.vy = 0;
-        this.lastUpdate = Date.now();
-        this.startTime = null;
-        this.endTime = null;
-      }
+// Track Object
+class TrackedObject {
+  constructor(id, x, y) {
+    this.id = id;
+    this.x = x;
+    this.y = y;
+    this.startTime = null;
+    this.endTime = null;
+    this.lastUpdate = Date.now();
+  }
+  update(x, y) {
+    this.x = x;
+    this.y = y;
+    this.lastUpdate = Date.now();
+  }
+}
 
-      update(x, y) {
-        const now = Date.now();
-        const dt = (now - this.lastUpdate) / 1000;
-        this.vx = (x - this.x) / dt;
-        this.vy = (y - this.y) / dt;
-        this.x = x;
-        this.y = y;
-        this.lastUpdate = now;
-      }
+// Match detections to trackers
+function matchAndTrack(predictions) {
+  const matched = new Set();
+  for (const pred of predictions) {
+    const [x, y, w, h] = pred.bbox;
+    const cx = x + w / 2;
+    const cy = y + h / 2;
 
-      predict() {
-        const now = Date.now();
-        const dt = (now - this.lastUpdate) / 1000;
-        return {
-          x: this.x + this.vx * dt,
-          y: this.y + this.vy * dt
-        };
-      }
-    }
-
-    function matchAndTrack(predictions) {
-      const matched = new Set();
-
-      for (const pred of predictions) {
-        const [x, y, w, h] = pred.bbox;
-        const cx = x + w / 2;
-        const cy = y + h / 2;
-
-        let bestMatch = null;
-        let minDist = 50;
-
-        for (const id in trackers) {
-          const t = trackers[id];
-          const dx = cx - t.x;
-          const dy = cy - t.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < minDist && !matched.has(id)) {
-            bestMatch = id;
-            minDist = dist;
-          }
-        }
-
-        if (bestMatch) {
-          trackers[bestMatch].update(cx, cy);
-          matched.add(bestMatch);
-          pred.trackerId = bestMatch;
-        } else {
-          trackerId++;
-          trackers[trackerId] = new TrackedObject(trackerId, cx, cy);
-          pred.trackerId = trackerId;
-        }
+    let bestMatch = null;
+    let minDist = 50;
+    for (const id in trackers) {
+      const t = trackers[id];
+      const dx = cx - t.x;
+      const dy = cy - t.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < minDist && !matched.has(id)) {
+        bestMatch = id;
+        minDist = dist;
       }
     }
 
-    // Camera Access
-    navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: { exact: "environment" } }
-    }).then(stream => {
-      video.srcObject = stream;
-    }).catch(err => {
-      log.innerHTML = `<p style="color:red;">❌ Rear camera not accessible.</p>`;
+    if (bestMatch) {
+      trackers[bestMatch].update(cx, cy);
+      pred.trackerId = bestMatch;
+      matched.add(bestMatch);
+    } else {
+      trackerId++;
+      trackers[trackerId] = new TrackedObject(trackerId, cx, cy);
+      pred.trackerId = trackerId;
+    }
+  }
+}
+
+// Camera Access
+navigator.mediaDevices.getUserMedia({
+  video: { width: 480, height: 360, facingMode: "environment" }
+}).then(stream => {
+  video.srcObject = stream;
+}).catch(err => {
+  log.innerHTML = `<p style="color:red;">❌ Camera not accessible.</p>`;
+});
+
+// Load model
+cocoSsd.load().then(loaded => {
+  model = loaded;
+  log.innerHTML = "✅ Model Loaded - Detecting Vehicles...";
+});
+
+// Detection loop (reduced FPS)
+video.addEventListener('play', () => {
+  setInterval(async () => {
+    if (!model) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Draw lines
+    ctx.strokeStyle = 'red';
+    [line1, line2].forEach(line => {
+      ctx.beginPath();
+      ctx.moveTo(0, line);
+      ctx.lineTo(canvas.width, line);
+      ctx.stroke();
     });
 
-    cocoSsd.load().then(loaded => {
-      model = loaded;
-      log.innerHTML = "✅ Ready for detecting vehicles...";
-    });
+    const predictions = await model.detect(video);
+    const vehicles = predictions.filter(p => ['car','truck','motorcycle','bus'].includes(p.class) && p.score > 0.7);
 
-    video.addEventListener('play', () => {
-      const detect = async () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    matchAndTrack(vehicles);
 
-        // Draw lines
-        ctx.strokeStyle = 'red';
-        ctx.lineWidth = 2;
-        [line1, line2].forEach(line => {
-          ctx.beginPath();
-          ctx.moveTo(0, line);
-          ctx.lineTo(canvas.width, line);
-          ctx.stroke();
+    for (const pred of vehicles) {
+      const [x, y, w, h] = pred.bbox;
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const id = pred.trackerId;
+      const tracker = trackers[id];
+
+      ctx.strokeStyle = 'lime';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = 'lime';
+      ctx.fillText(`${pred.class.toUpperCase()} (${id})`, x, y - 5);
+
+      if (!tracker.startTime && cy >= line1) {
+        tracker.startTime = Date.now();
+      }
+
+      if (tracker.startTime && !tracker.endTime && cy >= line2) {
+        tracker.endTime = Date.now();
+        const timeTaken = (tracker.endTime - tracker.startTime) / 1000;
+        const speed = (distanceMeters / timeTaken) * 3.6;
+        const timestamp = new Date().toLocaleString();
+
+        log.innerHTML = `<p>${speed > 60 ? '⚠️ Over Speed' : '✅ OK'} — <strong>${pred.class.toUpperCase()}</strong>: ${speed.toFixed(2)} km/h</p>`;
+        if (speed > 60) alertSound.play();
+
+        // Run OCR only once per vehicle
+        const plateCanvas = document.createElement('canvas');
+        plateCanvas.width = w;
+        plateCanvas.height = h;
+        plateCanvas.getContext('2d').drawImage(video, x, y, w, h, 0, 0, w, h);
+
+        Tesseract.recognize(plateCanvas, 'eng').then(result => {
+          const number = result.data.text.trim().replace(/\s+/g, '') || 'N/A';
+          log.innerHTML += `<p>🔍 Plate: <strong>${number}</strong></p>`;
+          vehicleData.push({
+            type: pred.class.toUpperCase(),
+            speed: speed.toFixed(2),
+            plate: number,
+            time: timestamp
+          });
         });
 
-        if (!model) return requestAnimationFrame(detect);
-
-        const predictions = await model.detect(video);
-        const vehicles = predictions.filter(p => ['car', 'truck', 'motorcycle', 'bus'].includes(p.class) && p.score > 0.66);
-        matchAndTrack(vehicles);
-
-        for (const pred of vehicles) {
-          const [x, y, w, h] = pred.bbox;
-          const cx = x + w / 2;
-          const cy = y + h / 2;
-          const id = pred.trackerId;
-          const tracker = trackers[id];
-
-          ctx.strokeStyle = 'lime';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x, y, w, h);
-          ctx.fillStyle = 'lime';
-          ctx.fillText(`${pred.class.toUpperCase()} (${id})`, x, y - 5);
-
-          if (!tracker.startTime && cy >= line1) {
-            tracker.startTime = Date.now();
-          }
-
-          if (tracker.startTime && !tracker.endTime && cy >= line2) {
-            tracker.endTime = Date.now();
-            const timeTaken = (tracker.endTime - tracker.startTime) / 1000;
-            const speed = (distanceMeters / timeTaken) * 3.6;
-            const timestamp = new Date().toLocaleString();
-
-            log.innerHTML = `<p>${speed > 60 ? '⚠️ Over Speed' : '✅ OK'} — <strong>${pred.class.toUpperCase()}</strong>: ${speed.toFixed(2)} km/h</p>`;
-
-            if (speed > 60) alertSound.play();
-
-            const plateCanvas = document.createElement('canvas');
-            plateCanvas.width = w;
-            plateCanvas.height = h;
-            plateCanvas.getContext('2d').drawImage(video, x, y, w, h, 0, 0, w, h);
-
-            try {
-              const result = await Tesseract.recognize(plateCanvas, 'eng');
-              const number = result.data.text.trim().replace(/\s+/g, '') || 'N/A';
-              log.innerHTML += `<p>🔍 Number Plate: <strong>${number}</strong></p>`;
-
-              vehicleData.push({
-                type: pred.class.toUpperCase(),
-                speed: speed.toFixed(2),
-                plate: number,
-                time: timestamp
-              });
-            } catch {
-              log.innerHTML += `<p style="color:orange;">⚠️ OCR failed</p>`;
-            }
-
-            setTimeout(() => delete trackers[id], 3000);
-          }
-        }
-
-        requestAnimationFrame(detect);
-      };
-
-      detect();
-    });
-
-    function exportCSV() {
-      if (!vehicleData.length) {
-        alert("No data to export.");
-        return;
+        setTimeout(() => delete trackers[id], 3000);
       }
-
-      const headers = "Vehicle Type,Speed (km/h),Number Plate,Timestamp\n";
-      const rows = vehicleData.map(v => `${v.type},${v.speed},${v.plate},${v.time}`).join("\n");
-      const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "vehicle_speed_log.csv";
-      link.click();
     }
+  }, 200); // run detection every 200ms (~5 FPS)
+});
 
-    function resetData() {
-      vehicleData.length = 0;
-      for (let id in trackers) delete trackers[id];
-      log.innerHTML = "🔁 Tracker reset.";
-    }
-  </script>
+function exportCSV() {
+  if (!vehicleData.length) {
+    alert("No data to export.");
+    return;
+  }
+  const headers = "Vehicle Type,Speed (km/h),Number Plate,Timestamp\n";
+  const rows = vehicleData.map(v => `${v.type},${v.speed},${v.plate},${v.time}`).join("\n");
+  const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "vehicle_speed_log.csv";
+  link.click();
+}
+
+function resetData() {
+  vehicleData.length = 0;
+  for (let id in trackers) delete trackers[id];
+  log.innerHTML = "🔁 Tracker reset.";
+}
+</script>
+
 </body>
 </html>
